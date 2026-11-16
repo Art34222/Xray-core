@@ -139,6 +139,42 @@ func (c *UConn) VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x50
 	return nil
 }
 
+// HasX25519MLKEM768 reports whether X25519MLKEM768 comes before optional X25519 in the key shares,
+// otherwise REALITY servers (since v26.9.9) reject the Client Hello as outdated/strange.
+// https://github.com/XTLS/REALITY/commit/8cdf7bf9c7f0
+func HasX25519MLKEM768(keyShares []utls.KeyShare) bool {
+	for _, keyShare := range keyShares {
+		switch keyShare.Group {
+		case utls.X25519MLKEM768:
+			return true
+		case utls.X25519:
+			return false
+		}
+	}
+	return false
+}
+
+// CheckFingerprint returns an error if REALITY servers will reject the Client Hello of the fingerprint.
+// The randomized ones are skipped, since they may or may not have X25519MLKEM768, UClient will check them.
+func CheckFingerprint(name string) error {
+	fingerprint := tls.GetFingerprint(name)
+	if fingerprint == nil {
+		return errors.New(`unknown "fingerprint": `, name)
+	}
+	switch fingerprint.Client {
+	case utls.HelloRandomized.Client, utls.HelloRandomizedALPN.Client, utls.HelloRandomizedNoALPN.Client:
+		return nil
+	}
+	uConn := utls.UClient(nil, &utls.Config{ServerName: "www.example.com"}, *fingerprint)
+	if err := uConn.BuildHandshakeState(); err != nil {
+		return errors.New(`"fingerprint": `, name).Base(err)
+	}
+	if !HasX25519MLKEM768(uConn.HandshakeState.Hello.KeyShares) {
+		return errors.New(`"fingerprint": "`, name, `" doesn't have X25519MLKEM768 before optional X25519, REALITY servers (since v26.9.9) will reject it, please use "chrome", "firefox", "safari", or "random"`)
+	}
+	return nil
+}
+
 func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destination) (net.Conn, error) {
 	localAddr := c.LocalAddr().String()
 	uConn := &UConn{
@@ -163,6 +199,9 @@ func UClient(c net.Conn, config *Config, ctx context.Context, dest net.Destinati
 	{
 		uConn.BuildHandshakeState()
 		hello := uConn.HandshakeState.Hello
+		if !HasX25519MLKEM768(hello.KeyShares) {
+			return nil, errors.New("Current fingerprint ", uConn.ClientHelloID.Client, uConn.ClientHelloID.Version, " doesn't have X25519MLKEM768 before optional X25519, REALITY servers (since v26.9.9) will reject it, REALITY handshake cannot establish.")
+		}
 		hello.SessionId = make([]byte, 32)
 		copy(hello.Raw[39:], hello.SessionId) // the fixed location of `Session ID`
 		hello.SessionId[0] = core.Version_x
