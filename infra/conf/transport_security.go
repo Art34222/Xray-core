@@ -181,8 +181,8 @@ func (c *REALITYConfig) Build() (proto.Message, error) {
 		if config.Fingerprint == "unsafe" || config.Fingerprint == "hellogolang" {
 			return nil, errors.New(`invalid "fingerprint": `, config.Fingerprint)
 		}
-		if tls.GetFingerprint(config.Fingerprint) == nil {
-			return nil, errors.New(`unknown "fingerprint": `, config.Fingerprint)
+		if err := reality.CheckFingerprint(config.Fingerprint); err != nil {
+			return nil, err
 		}
 		if len(c.ServerNames) != 0 {
 			return nil, errors.New(`non-empty "serverNames", please use "serverName" instead`)
